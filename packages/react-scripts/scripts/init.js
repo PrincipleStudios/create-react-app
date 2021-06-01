@@ -48,7 +48,7 @@ function tryGitInit() {
       return false;
     }
 
-    execSync('git init', { stdio: 'ignore' });
+    execSync('git init -b main', { stdio: 'ignore' });
     return true;
   } catch (e) {
     console.warn('Git repo not initialized', e);
