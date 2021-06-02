@@ -5,6 +5,12 @@
  * This source code is licensed under the MIT license found in the
  * LICENSE file in the root directory of this source tree.
  */
+
+// Much of this is adapted from the following files:
+//  - ./build.js
+//  - /packages/react-dev-utils/WebpackDevServerUtils.js
+// Changes here may be more easily re-adapted rather than merged.
+
 // @remove-on-eject-end
 'use strict';
 
@@ -34,35 +40,182 @@ verifyTypeScriptSetup();
 const fs = require('fs');
 const chalk = require('react-dev-utils/chalk');
 const webpack = require('webpack');
-const WebpackDevServer = require('webpack-dev-server');
 const clearConsole = require('react-dev-utils/clearConsole');
 const checkRequiredFiles = require('react-dev-utils/checkRequiredFiles');
-const {
-  choosePort,
-  createCompiler,
-  prepareProxy,
-  prepareUrls,
-} = require('react-dev-utils/WebpackDevServerUtils');
-const openBrowser = require('react-dev-utils/openBrowser');
-const semver = require('semver');
+/** extracted and modified from react-dev-utils/WebpackDevServerUtils */
+function createCompiler({ config, useTypeScript, tscCompileOnError, webpack }) {
+  const typescriptFormatter = require('react-dev-utils/typescriptFormatter');
+  const forkTsCheckerWebpackPlugin = require('react-dev-utils/ForkTsCheckerWebpackPlugin');
+  // "Compiler" is a low-level interface to webpack.
+  // It lets us listen to some events and provide our own custom messages.
+  let compiler;
+  try {
+    compiler = webpack(config);
+  } catch (err) {
+    console.log(chalk.red('Failed to compile.'));
+    console.log();
+    console.log(err.message || err);
+    console.log();
+    process.exit(1);
+  }
+
+  // "invalid" event fires when you have changed a file, and webpack is
+  // recompiling a bundle. WebpackDevServer takes care to pause serving the
+  // bundle, so if you refresh, it'll wait instead of serving the old one.
+  // "invalid" is short for "bundle invalidated", it doesn't imply any errors.
+  compiler.hooks.invalid.tap('invalid', () => {
+    if (isInteractive) {
+      clearConsole();
+    }
+    console.log('Compiling...');
+  });
+
+  let tsMessagesPromise;
+  let tsMessagesResolver;
+
+  if (useTypeScript) {
+    compiler.hooks.beforeCompile.tap('beforeCompile', () => {
+      tsMessagesPromise = new Promise(resolve => {
+        tsMessagesResolver = msgs => resolve(msgs);
+      });
+    });
+
+    forkTsCheckerWebpackPlugin
+      .getCompilerHooks(compiler)
+      .receive.tap('afterTypeScriptCheck', (diagnostics, lints) => {
+        const allMsgs = [...diagnostics, ...lints];
+        const format = message =>
+          `${message.file}\n${typescriptFormatter(message, true)}`;
+
+        tsMessagesResolver({
+          errors: allMsgs.filter(msg => msg.severity === 'error').map(format),
+          warnings: allMsgs
+            .filter(msg => msg.severity === 'warning')
+            .map(format),
+        });
+      });
+  }
+
+  // "done" event fires when webpack has finished recompiling the bundle.
+  // Whether or not you have warnings or errors, you will get this event.
+  compiler.hooks.done.tap('done', async stats => {
+    if (isInteractive) {
+      clearConsole();
+    }
+
+    // We have switched off the default webpack output in WebpackDevServer
+    // options so we are going to "massage" the warnings and errors and present
+    // them in a readable focused way.
+    // We only construct the warnings and errors for speed:
+    // https://github.com/facebook/create-react-app/issues/4492#issuecomment-421959548
+    const statsData = stats.toJson({
+      all: false,
+      warnings: true,
+      errors: true,
+    });
+
+    if (useTypeScript && statsData.errors.length === 0) {
+      const delayedMsg = setTimeout(() => {
+        console.log(
+          chalk.yellow(
+            'Files successfully emitted, waiting for typecheck results...'
+          )
+        );
+      }, 100);
+
+      const messages = await tsMessagesPromise;
+      clearTimeout(delayedMsg);
+      if (tscCompileOnError) {
+        statsData.warnings.push(...messages.errors);
+      } else {
+        statsData.errors.push(...messages.errors);
+      }
+      statsData.warnings.push(...messages.warnings);
+
+      // Push errors and warnings into compilation result
+      // to show them after page refresh triggered by user.
+      if (tscCompileOnError) {
+        stats.compilation.warnings.push(...messages.errors);
+      } else {
+        stats.compilation.errors.push(...messages.errors);
+      }
+      stats.compilation.warnings.push(...messages.warnings);
+
+      if (isInteractive) {
+        clearConsole();
+      }
+    }
+
+    const messages = formatWebpackMessages(statsData);
+    const isSuccessful = !messages.errors.length && !messages.warnings.length;
+    if (isSuccessful) {
+      console.log(chalk.green('Compiled successfully!'));
+    }
+
+    // If errors exist, only show errors.
+    if (messages.errors.length) {
+      // Only keep the first error. Others are often indicative
+      // of the same problem, but confuse the reader with noise.
+      if (messages.errors.length > 1) {
+        messages.errors.length = 1;
+      }
+      console.log(chalk.red('Failed to compile.\n'));
+      console.log(messages.errors.join('\n\n'));
+      return;
+    }
+
+    // Show warnings if no errors were found.
+    if (messages.warnings.length) {
+      console.log(chalk.yellow('Compiled with warnings.\n'));
+      console.log(messages.warnings.join('\n\n'));
+
+      // Teach some ESLint tricks.
+      console.log(
+        '\nSearch for the ' +
+          chalk.underline(chalk.yellow('keywords')) +
+          ' to learn more about each warning.'
+      );
+      console.log(
+        'To ignore, add ' +
+          chalk.cyan('// eslint-disable-next-line') +
+          ' to the line before.\n'
+      );
+    }
+  });
+
+  // You can safely remove this after ejecting.
+  // We only use this block for testing of Create React App itself:
+  const isSmokeTest = process.argv.some(
+    arg => arg.indexOf('--smoke-test') > -1
+  );
+  if (isSmokeTest) {
+    compiler.hooks.failed.tap('smokeTest', async () => {
+      await tsMessagesPromise;
+      process.exit(1);
+    });
+    compiler.hooks.done.tap('smokeTest', async stats => {
+      await tsMessagesPromise;
+      if (stats.hasErrors() || stats.hasWarnings()) {
+        process.exit(1);
+      } else {
+        process.exit(0);
+      }
+    });
+  }
+
+  return compiler;
+}
+
 const paths = require('../config/paths');
 const configFactory = require('../config/webpack.config');
-const createDevServerConfig = require('../config/webpackDevServer.config');
-const getClientEnvironment = require('../config/env');
-const react = require(require.resolve('react', { paths: [paths.appPath] }));
+const formatWebpackMessages = require('react-dev-utils/formatWebpackMessages');
 
-const env = getClientEnvironment(paths.publicUrlOrPath.slice(0, -1));
-const useYarn = fs.existsSync(paths.yarnLockFile);
 const isInteractive = process.stdout.isTTY;
 
 // Warn and crash if required files are missing
 if (!checkRequiredFiles([paths.appHtml, paths.appIndexJs])) {
   process.exit(1);
 }
-
-// Tools like Cloud9 rely on this.
-const DEFAULT_PORT = parseInt(process.env.PORT, 10) || 3000;
-const HOST = process.env.HOST || '0.0.0.0';
 
 if (process.env.HOST) {
   console.log(
@@ -81,102 +234,38 @@ if (process.env.HOST) {
   console.log();
 }
 
-// We require that you explicitly set browsers and do not fall back to
-// browserslist defaults.
-const { checkBrowsers } = require('react-dev-utils/browsersHelper');
-checkBrowsers(paths.appPath, isInteractive)
-  .then(() => {
-    // We attempt to use the default port but if it is busy, we offer the user to
-    // run on a different port. `choosePort()` Promise resolves to the next free port.
-    return choosePort(HOST, DEFAULT_PORT);
-  })
-  .then(port => {
-    if (port == null) {
-      // We have not found a port.
-      return;
-    }
+const config = configFactory('development');
 
-    const config = configFactory('development');
-    const protocol = process.env.HTTPS === 'true' ? 'https' : 'http';
-    const appName = require(paths.appPackageJson).name;
+const useTypeScript = fs.existsSync(paths.appTsConfig);
+const tscCompileOnError = process.env.TSC_COMPILE_ON_ERROR === 'true';
 
-    const useTypeScript = fs.existsSync(paths.appTsConfig);
-    const tscCompileOnError = process.env.TSC_COMPILE_ON_ERROR === 'true';
-    const urls = prepareUrls(
-      protocol,
-      HOST,
-      port,
-      paths.publicUrlOrPath.slice(0, -1)
-    );
-    const devSocket = {
-      warnings: warnings =>
-        devServer.sockWrite(devServer.sockets, 'warnings', warnings),
-      errors: errors =>
-        devServer.sockWrite(devServer.sockets, 'errors', errors),
-    };
-    // Create a webpack compiler that is configured with custom messages.
-    const compiler = createCompiler({
-      appName,
-      config,
-      devSocket,
-      urls,
-      useYarn,
-      useTypeScript,
-      tscCompileOnError,
-      webpack,
-    });
-    // Load proxy config
-    const proxySetting = require(paths.appPackageJson).proxy;
-    const proxyConfig = prepareProxy(
-      proxySetting,
-      paths.appPublic,
-      paths.publicUrlOrPath
-    );
-    // Serve webpack assets generated by the compiler over a web server.
-    const serverConfig = createDevServerConfig(
-      proxyConfig,
-      urls.lanUrlForConfig
-    );
-    const devServer = new WebpackDevServer(compiler, serverConfig);
-    // Launch WebpackDevServer.
-    devServer.listen(port, HOST, err => {
-      if (err) {
-        return console.log(err);
-      }
-      if (isInteractive) {
-        clearConsole();
-      }
+// Create a webpack compiler that is configured with custom messages.
+const compiler = createCompiler({
+  config,
+  useTypeScript,
+  tscCompileOnError,
+  webpack,
+});
 
-      if (env.raw.FAST_REFRESH && semver.lt(react.version, '16.10.0')) {
-        console.log(
-          chalk.yellow(
-            `Fast Refresh requires React 16.10 or higher. You are using React ${react.version}.`
-          )
-        );
-      }
+const watcher = compiler.watch({}, err => {
+  if (err) {
+    return console.log(err);
+  }
 
-      console.log(chalk.cyan('Starting the development server...\n'));
-      openBrowser(urls.localUrlForBrowser);
-    });
+  console.log(chalk.cyan('Files are now ready.\n'));
+});
 
-    ['SIGINT', 'SIGTERM'].forEach(function (sig) {
-      process.on(sig, function () {
-        devServer.close();
-        process.exit();
-      });
-    });
-
-    if (process.env.CI !== 'true') {
-      // Gracefully exit when stdin ends
-      process.stdin.on('end', function () {
-        devServer.close();
-        process.exit();
-      });
-    }
-  })
-  .catch(err => {
-    if (err && err.message) {
-      console.log(err.message);
-    }
-    process.exit(1);
+['SIGINT', 'SIGTERM'].forEach(function (sig) {
+  process.on(sig, function () {
+    watcher.close();
+    process.exit();
   });
+});
+
+if (process.env.CI !== 'true') {
+  // Gracefully exit when stdin ends
+  process.stdin.on('end', function () {
+    watcher.close();
+    process.exit();
+  });
+}
