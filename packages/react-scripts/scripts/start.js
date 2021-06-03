@@ -41,7 +41,6 @@ const fs = require('fs');
 const chalk = require('react-dev-utils/chalk');
 const webpack = require('webpack');
 const clearConsole = require('react-dev-utils/clearConsole');
-const checkRequiredFiles = require('react-dev-utils/checkRequiredFiles');
 /** extracted and modified from react-dev-utils/WebpackDevServerUtils */
 function createCompiler({ config, useTypeScript, tscCompileOnError, webpack }) {
   const typescriptFormatter = require('react-dev-utils/typescriptFormatter');
@@ -211,11 +210,6 @@ const configFactory = require('../config/webpack.config');
 const formatWebpackMessages = require('react-dev-utils/formatWebpackMessages');
 
 const isInteractive = process.stdout.isTTY;
-
-// Warn and crash if required files are missing
-if (!checkRequiredFiles([paths.appHtml, paths.appIndexJs])) {
-  process.exit(1);
-}
 
 if (process.env.HOST) {
   console.log(
