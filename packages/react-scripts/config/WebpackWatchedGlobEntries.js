@@ -82,6 +82,7 @@ class WebpackWatchedGlobEntries {
         // Set the globbed files
         globbedFiles = Object.assign(files, globbedFiles);
       });
+      console.log(globbedFiles);
 
       return globbedFiles;
     };

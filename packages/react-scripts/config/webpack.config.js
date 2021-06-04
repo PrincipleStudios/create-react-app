@@ -173,10 +173,10 @@ module.exports = function (webpackEnv) {
       {},
       {
         entrypointNameTransform: file =>
-          path
-            .basename(file)
+          file
+            .substr(paths.appSrc.length + 1)
             .replace(/\.entrypoint\.[^.]+$/, '')
-            .replace(/[^a-zA-Z0-9_]+/, '_'),
+            .replace(/[^a-zA-Z0-9_]+/g, '_'),
       }
     ),
     output: {
