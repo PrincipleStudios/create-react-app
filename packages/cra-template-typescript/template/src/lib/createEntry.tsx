@@ -9,7 +9,7 @@ import reportWebVitals from '../reportWebVitals';
  */
 export function createEntry(Component: React.ComponentType) {
   return (element: HTMLElement, context: any) => {
-    function render(actualData) {
+    function render(actualData: any) {
       ReactDOM.render(
         <React.StrictMode>
           {actualData !== undefined ? (
