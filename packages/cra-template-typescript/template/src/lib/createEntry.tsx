@@ -7,7 +7,7 @@ import reportWebVitals from '../reportWebVitals';
  * @param Component is the React component to render
  * @returns A function that renders the component in the given element. This function also returns an update function for subsequent updates (for nesting within other JS frameworks.)
  */
-export function createEntry(Component: React.ComponentType) {
+export function createEntry(Component: React.ComponentType<any>) {
   return (element: HTMLElement, context: any) => {
     function render(actualData: any) {
       ReactDOM.render(
